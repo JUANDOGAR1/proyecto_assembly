@@ -1,0 +1,401 @@
+.global _start
+
+.text
+
+_start:
+main:
+    # Inicialización del entorno de pruebas
+    la   s0, pruebas_bcd
+    la   s1, signos_esperados
+    la   s2, floats_esperados
+    la   s3, resultados_obtenidos
+
+    la   t0, num_casos
+    lw   s4, 0(t0)
+    li   s5, 0                      # Contador de errores
+
+# Bucle principal para iterar sobre los casos de prueba
+bucle_pruebas:
+    beq  s4, zero, fin_pruebas
+
+    mv   a0, s0                     # Dirección del arreglo BCD
+    lw   a1, 0(s1)                  # Valor del signo (0 positivo, 1 negativo)
+
+    jal  ra, bcd_a_float
+
+    sw   a0, 0(s3)                  # Guardar resultado obtenido
+
+    # Comparación con la salida esperada
+    lw   t0, 0(s2)
+    beq  a0, t0, prueba_correcta
+
+    addi s5, s5, 1                  # Incrementar si la prueba falla
+
+prueba_correcta:
+    addi s0, s0, 60                 # Avanzar al siguiente BCD (15 palabras x 4 bytes)
+    addi s1, s1, 4                  # Avanzar dirección del signo
+    addi s2, s2, 4                  # Avanzar esperado
+    addi s3, s3, 4                  # Avanzar obtenido
+    addi s4, s4, -1                 # Restar contador de casos restantes
+
+    j    bucle_pruebas
+
+fin_pruebas:
+    la   t0, errores_total
+    sw   s5, 0(t0)
+
+fin:
+    j    fin                        # Bucle de finalización del programa
+
+
+# Conversión de BCD a IEEE-754 (32 bits)
+# Entradas: a0 = dirección dígitos BCD, a1 = signo (0 pos, 1 neg)
+# Salida: a0 = float codificado en 32 bits
+bcd_a_float:
+    # Obtención del bit de signo
+    la   t7, sign_bits
+    beq  a1, zero, signo_positivo
+    addi t7, t7, 4                  # Dirección de signo negativo
+
+signo_positivo:
+    lw   a2, 0(t7)                  # Máscara de signo (0x00000000 o 0x80000000)
+
+    la   t7, constante_100000
+    lw   a1, 0(t7)                  # Cargar divisor para 5 decimales
+
+    # Conversión de los primeros 10 dígitos (parte entera)
+    li   t0, 0                      # Acumulador entero
+    li   t1, 10                     # Contador de dígitos enteros
+
+convertir_entero_bcd:
+    beq  t1, zero, convertir_fraccion_bcd
+
+    lw   t2, 0(a0)                  # Leer dígito
+    add  t3, t0, t0                 # t0 * 2
+    add  t4, t3, t3                 # t0 * 4
+    add  t5, t4, t4                 # t0 * 8
+    add  t4, t5, t3                 # t0 * 10 mediante sumas
+    add  t0, t4, t2                 # Sumar dígito actual
+
+    addi a0, a0, 4                  # Siguiente posición BCD
+    addi t1, t1, -1
+    j    convertir_entero_bcd
+
+# Conversión de los 5 dígitos de la parte fraccionaria
+convertir_fraccion_bcd:
+    li   t1, 0                      # Acumulador fracción
+    li   t2, 5                      # Contador de dígitos fraccionarios
+
+convertir_fraccion_loop:
+    beq  t2, zero, comprobar_cero
+
+    lw   t3, 0(a0)                  # Leer dígito
+    add  t4, t1, t1                 # 2x
+    add  t5, t4, t4                 # 4x
+    add  t4, t5, t5                 # 8x
+    add  t5, t4, t1                 # 9x
+    add  t1, t5, t1                 # 10x
+    add  t1, t1, t3                 # Sumar dígito actual
+
+    addi a0, a0, 4
+    addi t2, t2, -1
+    j    convertir_fraccion_loop
+
+# Validación de caso especial cero
+comprobar_cero:
+    bne  t0, zero, numero_entero
+    bne  t1, zero, numero_menor_uno
+
+    mv   a0, a2                     # Retornar cero con su respectivo signo
+    jr   ra
+
+# Procesamiento para valores mayores o iguales a 1
+numero_entero:
+    la   t5, potencias2
+    li   t3, 30                     # Exponente base máximo
+
+buscar_potencia:
+    lw   t2, 0(t5)
+    bge  t0, t2, potencia_encontrada
+
+    addi t5, t5, 4
+    addi t3, t3, -1
+    j    buscar_potencia
+
+potencia_encontrada:
+    la   t5, exp_fields_pos
+    li   t4, 0
+
+buscar_exp_pos:
+    beq  t4, t3, exp_pos_encontrado
+    addi t5, t5, 4
+    addi t4, t4, 1
+    j    buscar_exp_pos
+
+exp_pos_encontrado:
+    lw   a3, 0(t5)                  # Cargar campo de exponente IEEE-754
+    sub  t4, t0, t2                 # Obtener residuo
+
+    li   t7, 0                      # Acumulador de mantisa
+    li   t3, 0                      # Contador de bits
+    li   t8, 23                     # Límite de bits de mantisa
+    la   t5, pesos_fraccion
+
+fraccion_entero_loop:
+    beq  t3, t8, fraccion_entero_guard
+
+    add  t0, t1, t1                 # Duplicar decimales
+    li   t1, 0
+    bge  t0, a1, carry_fraccion_entero
+    j    sin_carry_fraccion_entero
+
+carry_fraccion_entero:
+    sub  t0, t0, a1
+    li   t1, 1
+
+sin_carry_fraccion_entero:
+    add  t4, t4, t4                 # Duplicar residuo
+    add  t4, t4, t1
+    mv   t1, t0
+
+    bge  t4, t2, bit_uno_entero
+
+    addi t3, t3, 1
+    addi t5, t5, 4
+    j    fraccion_entero_loop
+
+bit_uno_entero:
+    sub  t4, t4, t2
+    lw   t0, 0(t5)
+    add  t7, t7, t0                 # Acumular peso del bit en la mantisa
+
+    addi t3, t3, 1
+    addi t5, t5, 4
+    j    fraccion_entero_loop
+
+# Generación del bit de guardia para redondeo
+fraccion_entero_guard:
+    add  t0, t1, t1
+    li   t1, 0
+    bge  t0, a1, carry_guard_entero
+    j    sin_carry_guard_entero
+
+carry_guard_entero:
+    sub  t0, t0, a1
+    li   t1, 1
+
+sin_carry_guard_entero:
+    add  t4, t4, t4
+    add  t4, t4, t1
+    mv   t1, t0
+
+    bge  t4, t2, guard_entero_uno
+    li   t5, 0
+    j    redondear_entero
+
+guard_entero_uno:
+    sub  t4, t4, t2
+    li   t5, 1
+
+redondear_entero:
+    beq  t5, zero, ensamblar_float
+    bne  t1, zero, hacer_round
+
+    andi t0, t7, 1
+    beq  t0, zero, ensamblar_float
+
+hacer_round:
+    addi t7, t7, 1
+
+    la   t0, limite_mantisa
+    lw   t0, 0(t0)
+    bge  t7, t0, overflow_mantisa
+    j    ensamblar_float
+
+overflow_mantisa:
+    li   t7, 0
+    la   t0, paso_exponente
+    lw   t0, 0(t0)
+    add  a3, a3, t0
+    j    ensamblar_float
+
+# Procesamiento para valores estrictamente entre 0 y 1
+numero_menor_uno:
+    li   t3, -1
+    mv   t4, t1
+
+buscar_exponente_neg:
+    bge  t4, a1, exponente_neg_encontrado
+    add  t4, t4, t4
+    addi t3, t3, -1
+    j    buscar_exponente_neg
+
+exponente_neg_encontrado:
+    sub  t4, t4, a1                 # Remover 1 implícito
+
+    la   t5, exp_fields_neg
+    li   t0, -1
+
+buscar_exp_neg:
+    beq  t0, t3, exp_neg_encontrado
+    addi t5, t5, 4
+    addi t0, t0, -1
+    j    buscar_exp_neg
+
+exp_neg_encontrado:
+    lw   a3, 0(t5)
+
+    li   t7, 0
+    li   t3, 0
+    li   t8, 23
+    la   t5, pesos_fraccion
+
+fraccion_neg_loop:
+    beq  t3, t8, fraccion_neg_guard
+    add  t4, t4, t4
+    bge  t4, a1, bit_uno_neg
+
+    addi t3, t3, 1
+    addi t5, t5, 4
+    j    fraccion_neg_loop
+
+bit_uno_neg:
+    sub  t4, t4, a1
+    lw   t0, 0(t5)
+    add  t7, t7, t0
+
+    addi t3, t3, 1
+    addi t5, t5, 4
+    j    fraccion_neg_loop
+
+fraccion_neg_guard:
+    add  t4, t4, t4
+    bge  t4, a1, guard_neg_uno
+    li   t5, 0
+    j    redondear_neg
+
+guard_neg_uno:
+    sub  t4, t4, a1
+    li   t5, 1
+
+redondear_neg:
+    beq  t5, zero, ensamblar_float
+    bne  t4, zero, hacer_round_neg
+
+    andi t0, t7, 1
+    beq  t0, zero, ensamblar_float
+
+hacer_round_neg:
+    addi t7, t7, 1
+    la   t0, limite_mantisa
+    lw   t0, 0(t0)
+    bge  t7, t0, overflow_mantisa_neg
+    j    ensamblar_float
+
+overflow_mantisa_neg:
+    li   t7, 0
+    la   t0, paso_exponente
+    lw   t0, 0(t0)
+    add  a3, a3, t0
+
+# Unión de las tres partes del formato IEEE-754
+ensamblar_float:
+    or   a0, a2, a3                 # Combinar signo y exponente
+    or   a0, a0, t7                 # Combinar mantisa
+    jr   ra
+
+
+.data
+
+num_casos:
+    .word 20
+
+pruebas_bcd:
+    .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0        # 0.00000
+    .word 0,0,0,0,0,0,0,0,0,1,0,0,0,0,0        # 1.00000
+    .word 0,0,0,0,0,0,0,0,0,1,0,0,0,0,0        # -1.00000
+    .word 0,0,0,0,0,0,0,0,0,0,1,0,0,0,0        # 0.10000
+    .word 0,0,0,0,0,0,0,0,0,0,1,0,0,0,0        # -0.10000
+    .word 0,0,0,0,0,0,0,0,0,0,8,0,0,0,0        # 0.80000
+    .word 0,0,0,0,0,0,0,0,0,0,8,0,0,0,0        # -0.80000
+    .word 0,0,0,0,0,0,0,0,0,1,2,5,0,0,0        # 1.25000
+    .word 0,0,0,0,0,0,0,0,0,1,2,5,0,0,0        # -1.25000
+    .word 0,0,0,0,0,0,0,0,0,3,1,4,1,5,9        # 3.14159
+    .word 0,0,0,0,0,0,0,0,0,3,1,4,1,5,9        # -3.14159
+    .word 0,0,0,0,0,0,0,0,0,9,5,0,0,0,0        # 9.50000
+    .word 0,0,0,0,0,0,0,0,0,9,5,0,0,0,0        # -9.50000
+    .word 0,0,0,0,0,0,0,0,1,0,0,0,0,0,0        # 10.00000
+    .word 0,0,0,0,0,0,0,0,1,0,0,0,0,0,0        # -10.00000
+    .word 0,0,0,0,0,0,0,0,3,5,5,0,0,0,0        # 35.50000
+    .word 0,0,0,0,0,0,0,0,3,5,5,0,0,0,0        # -35.50000
+    .word 0,0,0,0,0,0,0,9,9,9,9,9,9,9,9        # 999.99999
+    .word 2,1,4,7,4,8,3,6,4,7,0,0,0,0,0        # 2147483647.00000
+    .word 2,1,4,7,4,8,3,6,4,7,0,0,0,0,0        # -2147483647.00000
+
+signos_esperados:
+    .word 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1
+
+floats_esperados:
+    .word 0x00000000
+    .word 0x3F800000
+    .word 0xBF800000
+    .word 0x3DCCCCCD
+    .word 0xBDCCCCCD
+    .word 0x3F4CCCCD
+    .word 0xBF4CCCCD
+    .word 0x3FA00000
+    .word 0xBFA00000
+    .word 0x40490FD0
+    .word 0xC0490FD0
+    .word 0x41180000
+    .word 0xC1180000
+    .word 0x41200000
+    .word 0xC1200000
+    .word 0x420E0000
+    .word 0xC20E0000
+    .word 0x447A0000
+    .word 0x4F000000
+    .word 0xCF000000
+
+resultados_obtenidos:
+    .space 80
+
+errores_total:
+    .word 0
+
+sign_bits:
+    .word 0x00000000
+    .word 0x80000000
+
+constante_100000:
+    .word 100000
+
+limite_mantisa:
+    .word 0x00800000
+
+paso_exponente:
+    .word 0x00800000
+
+potencias2:
+    .word 0x40000000, 0x20000000, 0x10000000, 0x08000000, 0x04000000, 0x02000000, 0x01000000
+    .word 0x00800000, 0x00400000, 0x00200000, 0x00100000, 0x00080000, 0x00040000, 0x00020000
+    .word 0x00010000, 0x00008000, 0x00004000, 0x00002000, 0x00001000, 0x00000800, 0x00000400
+    .word 0x00000200, 0x00000100, 0x00000080, 0x00000040, 0x00000020, 0x00000010, 0x00000008
+    .word 0x00000004, 0x00000002, 0x00000001
+
+exp_fields_pos:
+    .word 0x3F800000, 0x40000000, 0x40800000, 0x41000000, 0x41800000, 0x42000000, 0x42800000
+    .word 0x43000000, 0x43800000, 0x44000000, 0x44800000, 0x45000000, 0x45800000, 0x46000000
+    .word 0x46800000, 0x47000000, 0x47800000, 0x48000000, 0x48800000, 0x49000000, 0x49800000
+    .word 0x4A000000, 0x4A800000, 0x4B000000, 0x4B800000, 0x4C000000, 0x4C800000, 0x4D000000
+    .word 0x4D800000, 0x4E000000, 0x4E800000
+
+exp_fields_neg:
+    .word 0x3F000000, 0x3E800000, 0x3E000000, 0x3D800000, 0x3D000000
+    .word 0x3C800000, 0x3C000000, 0x3B800000, 0x3B000000, 0x3A800000
+
+pesos_fraccion:
+    .word 0x00400000, 0x00200000, 0x00100000, 0x00080000, 0x00040000, 0x00020000, 0x00010000
+    .word 0x00008000, 0x00004000, 0x00002000, 0x00001000, 0x00000800, 0x00000400, 0x00000200
+    .word 0x00000100, 0x00000080, 0x00000040, 0x00000020, 0x00000010, 0x00000008, 0x00000004
+    .word 0x00000002, 0x00000001
