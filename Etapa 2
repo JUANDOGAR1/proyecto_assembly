@@ -1,401 +1,585 @@
 .global _start
 
-.text
-
 _start:
+
 main:
-    # Inicialización del entorno de pruebas
-    la   s0, pruebas_bcd
-    la   s1, signos_esperados
-    la   s2, floats_esperados
-    la   s3, resultados_obtenidos
+    # Inicialización de punteros a las estructuras de memoria y contadores.
+	
+    la   s0, pruebas_bcd          # s0 = Puntero al número BCD actual en memoria
+    la   s1, floats_esperados     # s1 = Puntero a la tabla de resultados correctos
+    la   s2, resultados_obtenidos # s2 = Puntero al buffer donde guardaremos las respuestas
 
-    la   t0, num_casos
-    lw   s4, 0(t0)
-    li   s5, 0                      # Contador de errores
+    la   t0, num_pruebas          # Cargamos la dirección del número de pruebas
+    lw   s3, 0(t0)                # s3 = Cantidad total de pruebas pendientes a ejecutar
 
-# Bucle principal para iterar sobre los casos de prueba
+    addi s4, zero, 0              # s4 = Contador de pruebas fallidas (inicia en 0)
+
+
 bucle_pruebas:
-    beq  s4, zero, fin_pruebas
+    # Evaluar si quedan pruebas pendientes por procesar
+    beq  s3, zero, fin_pruebas    # Si s3 == 0, terminamos las ejecuciones ya no hay pruebas
 
-    mv   a0, s0                     # Dirección del arreglo BCD
-    lw   a1, 0(s1)                  # Valor del signo (0 positivo, 1 negativo)
 
-    jal  ra, bcd_a_float
+    # Preparar argumento y llamar a la función de conversión
+    addi a0, s0, 0                # a0 = Dirección base del número BCD actual
+    jal  ra, bcd_a_float          # Llamada a subrutina (retorna el resultado en a0)
 
-    sw   a0, 0(s3)                  # Guardar resultado obtenido
+    # Guardar el resultado en la memoria de resultados
+    sw   a0, 0(s2)                # Guardamos el float (IEEE-754) obtenido en resultados_obtenidos
 
-    # Comparación con la salida esperada
-    lw   t0, 0(s2)
-    beq  a0, t0, prueba_correcta
 
-    addi s5, s5, 1                  # Incrementar si la prueba falla
+    # Comparación de respuesta contra valor esperado
+    lw   t0, 0(s1)                # Cargamos el valor float esperado
+    beq  a0, t0, prueba_correcta  # Si a0 == t0, no se incrementa el contador de errores
+
+    addi s4, s4, 1                # Si son diferentes, incrementamos contador de errores en 1
+
 
 prueba_correcta:
-    addi s0, s0, 60                 # Avanzar al siguiente BCD (15 palabras x 4 bytes)
-    addi s1, s1, 4                  # Avanzar dirección del signo
-    addi s2, s2, 4                  # Avanzar esperado
-    addi s3, s3, 4                  # Avanzar obtenido
-    addi s4, s4, -1                 # Restar contador de casos restantes
+    # Avanzar punteros para la siguiente iteración
+    addi s0, s0, 64               # Avanzamos al siguiente BCD (16 words * 4 bytes = 64 bytes)
+    addi s1, s1, 4                # Avanzamos 1 word (4 bytes) en floats esperados
+    addi s2, s2, 4                # Avanzamos 1 word (4 bytes) en resultados obtenidos
 
-    j    bucle_pruebas
+    addi s3, s3, -1               # Decrementamos en 1 el número de pruebas pendientes
+    jal  zero, bucle_pruebas      # Repetir el ciclo
+
 
 fin_pruebas:
-    la   t0, errores_total
-    sw   s5, 0(t0)
+    # Almacenar el reporte final de errores
+    la   t0, total_errores
+    sw   s4, 0(t0)                # Guardamos el número final de errores en la variable total_errores
+
 
 fin:
-    j    fin                        # Bucle de finalización del programa
+    # Detener el procesador en bucle infinito
+    jal  zero, fin
 
 
-# Conversión de BCD a IEEE-754 (32 bits)
-# Entradas: a0 = dirección dígitos BCD, a1 = signo (0 pos, 1 neg)
-# Salida: a0 = float codificado en 32 bits
-bcd_a_float:
-    # Obtención del bit de signo
-    la   t7, sign_bits
-    beq  a1, zero, signo_positivo
-    addi t7, t7, 4                  # Dirección de signo negativo
+bcd_a_float: # BLOQUE 1: Carga inicial de datos desde la memoria BCD
+    addi a2, a0, 0                # a2 = Puntero de lectura que recorrerá el BCD
+    lw   a1, 0(a2)                # a1 = Signo (0 o 1)
 
-signo_positivo:
-    lw   a2, 0(t7)                  # Máscara de signo (0x00000000 o 0x80000000)
+    addi a3, zero, 0              # a3 = Variable acumuladora para la parte entera
+    addi a4, zero, 0              # a4 = Variable acumuladora para la parte fraccionaria
 
-    la   t7, constante_100000
-    lw   a1, 0(t7)                  # Cargar divisor para 5 decimales
 
-    # Conversión de los primeros 10 dígitos (parte entera)
-    li   t0, 0                      # Acumulador entero
-    li   t1, 10                     # Contador de dígitos enteros
+    #Reconstrucción matemática de la Parte Entera
+    # Algoritmo: valor = (valor * 10) + nuevo_digito
+    # Donde: x * 10 = (x * 8) + (x * 2) mediante sumas sucesivas.
+	
+    addi a2, a2, 4                # Avanzar puntero al primer dígito entero [1]
+    addi t0, zero, 10             # Contador para procesar los 10 dígitos enteros
 
-convertir_entero_bcd:
-    beq  t1, zero, convertir_fraccion_bcd
 
-    lw   t2, 0(a0)                  # Leer dígito
-    add  t3, t0, t0                 # t0 * 2
-    add  t4, t3, t3                 # t0 * 4
-    add  t5, t4, t4                 # t0 * 8
-    add  t4, t5, t3                 # t0 * 10 mediante sumas
-    add  t0, t4, t2                 # Sumar dígito actual
+construir_entero:
+    beq  t0, zero, entero_terminado
 
-    addi a0, a0, 4                  # Siguiente posición BCD
-    addi t1, t1, -1
-    j    convertir_entero_bcd
+    lw   t1, 0(a2)                # t1 = Dígito BCD actual
 
-# Conversión de los 5 dígitos de la parte fraccionaria
-convertir_fraccion_bcd:
-    li   t1, 0                      # Acumulador fracción
-    li   t2, 5                      # Contador de dígitos fraccionarios
+    add  t2, a3, a3               # t2 = valor_entero * 2
+    add  t3, t2, t2               # t3 = valor_entero * 4
+    add  t3, t3, t3               # t3 = valor_entero * 8
+    add  t3, t3, t2               # t3 = (valor_entero * 8) + (valor_entero * 2) = valor_entero * 10
 
-convertir_fraccion_loop:
-    beq  t2, zero, comprobar_cero
+    add  a3, t3, t1               # a3 = (valor_entero * 10) + digito_actual
 
-    lw   t3, 0(a0)                  # Leer dígito
-    add  t4, t1, t1                 # 2x
-    add  t5, t4, t4                 # 4x
-    add  t4, t5, t5                 # 8x
-    add  t5, t4, t1                 # 9x
-    add  t1, t5, t1                 # 10x
-    add  t1, t1, t3                 # Sumar dígito actual
+    addi a2, a2, 4                # Siguiente dígito en memoria
+    addi t0, t0, -1               # Decrementar contador de dígitos
+    jal  zero, construir_entero
 
-    addi a0, a0, 4
-    addi t2, t2, -1
-    j    convertir_fraccion_loop
+entero_terminado: #Reconstrucción matemática de la Parte Fraccionaria
+    			  # Se leen los 5 dígitos y se acumulan como número entero en a4.
+   				  # Representa la fracción: a4 / 100000
+				  
+    addi t0, zero, 5              # Contador para los 5 dígitos decimales
 
-# Validación de caso especial cero
-comprobar_cero:
-    bne  t0, zero, numero_entero
-    bne  t1, zero, numero_menor_uno
 
-    mv   a0, a2                     # Retornar cero con su respectivo signo
+construir_fraccion:
+    beq  t0, zero, fraccion_terminada
+
+    lw   t1, 0(a2)                # t1 = Dígito decimal actual
+
+    add  t2, a4, a4               # t2 = fraccion * 2
+    add  t3, t2, t2               # t3 = fraccion * 4
+    add  t3, t3, t3               # t3 = fraccion * 8
+    add  t3, t3, t2               # t3 = fraccion * 10
+
+    add  a4, t3, t1               # a4 = (fraccion * 10) + digito_actual
+
+    addi a2, a2, 4                # Siguiente dígito decimal
+    addi t0, t0, -1               # Decrementar contador
+    jal  zero, construir_fraccion
+
+
+fraccion_terminada:#Manejo especial del Caso Cero (0.0)
+    # Si Entero == 0 y Fracción == 0, se construye directamente el cero float
+    bne  a3, zero, hay_numero
+    bne  a4, zero, hay_numero
+
+    beq  a1, zero, cero_positivo  # Si signo es 0 -> +0.0 (0x00000000)
+
+
+    # Construcción manual de -0.0 (0x80000000) desplazando un '1' 31 posiciones
+    addi a0, zero, 1
+    addi t0, zero, 31
+
+
+crear_negativo_cero:
+    add  a0, a0, a0               # a0 = a0 << 1
+    addi t0, t0, -1
+    bne  t0, zero, crear_negativo_cero
+    jr   ra                       # Retornar 0x80000000
+
+
+cero_positivo:
+    addi a0, zero, 0              # Retornar 0x00000000
     jr   ra
 
-# Procesamiento para valores mayores o iguales a 1
-numero_entero:
-    la   t5, potencias2
-    li   t3, 30                     # Exponente base máximo
+
+hay_numero: #Bifurcación entre número >= 1 o número entre 0 y 1
+	bne  a3, zero, caso_entero    # Si parte entera != 0, procesar caso >= 1
+    jal  zero, caso_fraccion      # Si parte entera == 0, procesar caso < 1
+
+
+# PROCESAMIENTO: Números con Parte Entera (>= 1.0)
+#------------------------------------------------------------------------------------
+caso_entero:
+    #Búsqueda de la mayor potencia de 2 (2^E) <= Parte Entera
+    addi t5, zero, 1              # t5 = Potencia acumulada (inicia en 2^0 = 1)
+    addi t4, zero, 0              # t4 = Exponente E
+
 
 buscar_potencia:
-    lw   t2, 0(t5)
-    bge  t0, t2, potencia_encontrada
+    addi t0, zero, 30             # Límite superior de exponente de seguridad
+    bge  t4, t0, potencia_encontrada
 
-    addi t5, t5, 4
-    addi t3, t3, -1
-    j    buscar_potencia
+    add  t2, t5, t5               # t2 = potencia_actual * 2
+    bge  a3, t2, aumentar_potencia # Si entero >= 2*potencia, continuar escalando
+    jal  zero, potencia_encontrada
 
-potencia_encontrada:
-    la   t5, exp_fields_pos
-    li   t4, 0
 
-buscar_exp_pos:
-    beq  t4, t3, exp_pos_encontrado
-    addi t5, t5, 4
-    addi t4, t4, 1
-    j    buscar_exp_pos
+aumentar_potencia:
+    addi t5, t2, 0                # Actualizar potencia
+    addi t4, t4, 1                # Incrementar exponente E
+    jal  zero, buscar_potencia
 
-exp_pos_encontrado:
-    lw   a3, 0(t5)                  # Cargar campo de exponente IEEE-754
-    sub  t4, t0, t2                 # Obtener residuo
 
-    li   t7, 0                      # Acumulador de mantisa
-    li   t3, 0                      # Contador de bits
-    li   t8, 23                     # Límite de bits de mantisa
-    la   t5, pesos_fraccion
+potencia_encontrada: #Cálculo de residuos tras extraer el 1 implícito
+    sub  t6, a3, t5               # t6 = Residuo de la parte entera
+    addi t3, a4, 0                # t3 = Residuo de la parte decimal (escala /100000)
 
-fraccion_entero_loop:
-    beq  t3, t8, fraccion_entero_guard
 
-    add  t0, t1, t1                 # Duplicar decimales
-    li   t1, 0
-    bge  t0, a1, carry_fraccion_entero
-    j    sin_carry_fraccion_entero
+    # ---------------------------------------------------------------
+    # BLOQUE 7: Generación iterativa de los 23 bits de la mantisa
+    # ---------------------------------------------------------------
+    addi t0, zero, 23             # Contador para generar 23 bits
+    addi a2, zero, 0              # a2 = Registro que construirá la mantisa
 
-carry_fraccion_entero:
-    sub  t0, t0, a1
-    li   t1, 1
 
-sin_carry_fraccion_entero:
-    add  t4, t4, t4                 # Duplicar residuo
-    add  t4, t4, t1
-    mv   t1, t0
+bits_entero:
+    beq  t0, zero, bit_redondeo_entero
 
-    bge  t4, t2, bit_uno_entero
+    add  t6, t6, t6               # Multiplicar residuo entero por 2
+    add  t3, t3, t3               # Multiplicar residuo decimal por 2
 
-    addi t3, t3, 1
-    addi t5, t5, 4
-    j    fraccion_entero_loop
+    la   t1, cien_mil
+    lw   t1, 0(t1)
 
-bit_uno_entero:
-    sub  t4, t4, t2
-    lw   t0, 0(t5)
-    add  t7, t7, t0                 # Acumular peso del bit en la mantisa
+    bge  t3, t1, decimal_entero    # Si el decimal pasa de 100000, genera acarreo entero
+    jal  zero, comprobar_bit_entero
 
-    addi t3, t3, 1
-    addi t5, t5, 4
-    j    fraccion_entero_loop
 
-# Generación del bit de guardia para redondeo
-fraccion_entero_guard:
-    add  t0, t1, t1
-    li   t1, 0
-    bge  t0, a1, carry_guard_entero
-    j    sin_carry_guard_entero
+decimal_entero:
+    sub  t3, t3, t1               # Descontar 1.0 (100000) de la parte decimal
+    addi t6, t6, 1                # Sumar acarreo al residuo entero
 
-carry_guard_entero:
-    sub  t0, t0, a1
-    li   t1, 1
 
-sin_carry_guard_entero:
-    add  t4, t4, t4
-    add  t4, t4, t1
-    mv   t1, t0
+comprobar_bit_entero:
+    bge  t6, t5, bit_entero_uno   # Si residuo >= 2^E, el bit binario es 1
 
-    bge  t4, t2, guard_entero_uno
-    li   t5, 0
-    j    redondear_entero
-
-guard_entero_uno:
-    sub  t4, t4, t2
-    li   t5, 1
-
-redondear_entero:
-    beq  t5, zero, ensamblar_float
-    bne  t1, zero, hacer_round
-
-    andi t0, t7, 1
-    beq  t0, zero, ensamblar_float
-
-hacer_round:
-    addi t7, t7, 1
-
-    la   t0, limite_mantisa
-    lw   t0, 0(t0)
-    bge  t7, t0, overflow_mantisa
-    j    ensamblar_float
-
-overflow_mantisa:
-    li   t7, 0
-    la   t0, paso_exponente
-    lw   t0, 0(t0)
-    add  a3, a3, t0
-    j    ensamblar_float
-
-# Procesamiento para valores estrictamente entre 0 y 1
-numero_menor_uno:
-    li   t3, -1
-    mv   t4, t1
-
-buscar_exponente_neg:
-    bge  t4, a1, exponente_neg_encontrado
-    add  t4, t4, t4
-    addi t3, t3, -1
-    j    buscar_exponente_neg
-
-exponente_neg_encontrado:
-    sub  t4, t4, a1                 # Remover 1 implícito
-
-    la   t5, exp_fields_neg
-    li   t0, -1
-
-buscar_exp_neg:
-    beq  t0, t3, exp_neg_encontrado
-    addi t5, t5, 4
+    add  a2, a2, a2               # Bit = 0 (mantisa << 1)
     addi t0, t0, -1
-    j    buscar_exp_neg
+    jal  zero, bits_entero
 
-exp_neg_encontrado:
-    lw   a3, 0(t5)
 
-    li   t7, 0
-    li   t3, 0
-    li   t8, 23
-    la   t5, pesos_fraccion
+bit_entero_uno:
+    sub  t6, t6, t5               # Restar 2^E del residuo
+    add  a2, a2, a2
+    addi a2, a2, 1                # Bit = 1 (mantisa << 1 | 1)
+    addi t0, t0, -1
+    jal  zero, bits_entero
 
-fraccion_neg_loop:
-    beq  t3, t8, fraccion_neg_guard
-    add  t4, t4, t4
-    bge  t4, a1, bit_uno_neg
 
-    addi t3, t3, 1
-    addi t5, t5, 4
-    j    fraccion_neg_loop
+bit_redondeo_entero:
+    # ---------------------------------------------------------------
+    # BLOQUE 8: Extracción del bit 24 para aplicación de redondeo
+    # Aplica norma IEEE-754 "Round to Nearest, Ties to Even"
+    # ---------------------------------------------------------------
+    add  t6, t6, t6
+    add  t3, t3, t3
 
-bit_uno_neg:
-    sub  t4, t4, a1
-    lw   t0, 0(t5)
-    add  t7, t7, t0
+    la   t1, cien_mil
+    lw   t1, 0(t1)
 
-    addi t3, t3, 1
-    addi t5, t5, 4
-    j    fraccion_neg_loop
+    bge  t3, t1, redondeo_decimal_entero
+    jal  zero, comprobar_redondeo_entero
 
-fraccion_neg_guard:
-    add  t4, t4, t4
-    bge  t4, a1, guard_neg_uno
-    li   t5, 0
-    j    redondear_neg
 
-guard_neg_uno:
-    sub  t4, t4, a1
-    li   t5, 1
+redondeo_decimal_entero:
+    sub  t3, t3, t1
+    addi t6, t6, 1
 
-redondear_neg:
-    beq  t5, zero, ensamblar_float
-    bne  t4, zero, hacer_round_neg
 
-    andi t0, t7, 1
-    beq  t0, zero, ensamblar_float
+comprobar_redondeo_entero:
+    bge  t6, t5, hay_bit_redondeo_entero
+    jal  zero, ensamblar_entero
 
-hacer_round_neg:
-    addi t7, t7, 1
-    la   t0, limite_mantisa
-    lw   t0, 0(t0)
-    bge  t7, t0, overflow_mantisa_neg
-    j    ensamblar_float
 
-overflow_mantisa_neg:
-    li   t7, 0
-    la   t0, paso_exponente
-    lw   t0, 0(t0)
-    add  a3, a3, t0
+hay_bit_redondeo_entero:
+    sub  t6, t6, t5
 
-# Unión de las tres partes del formato IEEE-754
-ensamblar_float:
-    or   a0, a2, a3                 # Combinar signo y exponente
-    or   a0, a0, t7                 # Combinar mantisa
-    jr   ra
+    # Evaluar empates de redondeo
+    bne  t6, zero, hacer_redondeo_entero
+    bne  t3, zero, hacer_redondeo_entero
+    andi t1, a2, 1
+    bne  t1, zero, hacer_redondeo_entero # Si es impar, redondear
+    jal  zero, ensamblar_entero
 
+
+hacer_redondeo_entero:
+    addi a2, a2, 1                # Redondear mantisa (+1)
+
+    # Evaluar si ocurrió desbordamiento de la mantisa de 23 bits (alcanza 2^23)
+    addi t1, zero, 1
+    addi t2, zero, 23
+
+
+crear_limite_mantisa:
+    add  t1, t1, t1
+    addi t2, t2, -1
+    bne  t2, zero, crear_limite_mantisa
+
+    beq  a2, t1, desbordamiento_mantisa_entero
+    jal  zero, ensamblar_entero
+
+
+desbordamiento_mantisa_entero:
+    addi a2, zero, 0              # Reiniciar mantisa a 0
+    addi t4, t4, 1                # Incrementar exponente en 1
+
+
+
+#####################################################################
+# PROCESAMIENTO: Números estrictamente menores a 1.0 (0.x)
+#####################################################################
+
+caso_fraccion:
+
+    # ---------------------------------------------------------------
+    # BLOQUE 9: Normalización de números entre 0 y 1
+    # Multiplica sucesivamente la fracción por 2 hasta encontrar el primer 1
+    # ---------------------------------------------------------------
+    addi t4, zero, 0              # Exponente E = 0
+    addi t3, a4, 0                # Cargar residuo decimal
+
+
+normalizar_fraccion:
+    la   t1, cien_mil
+    lw   t1, 0(t1)
+
+    bge  t3, t1, fraccion_normalizada # Detener al alcanzar 1.0 (100000)
+
+    add  t3, t3, t3               # Fracción = Fracción * 2
+    addi t4, t4, -1               # Reducir exponente E (E = E - 1)
+    jal  zero, normalizar_fraccion
+
+
+fraccion_normalizada:
+    sub  t3, t3, t1               # Extraer el 1 implícito (restar 100000)
+
+
+    # ---------------------------------------------------------------
+    # BLOQUE 10: Extracción de 23 bits para la mantisa
+    # ---------------------------------------------------------------
+    addi a2, zero, 0              # Acumulador de mantisa
+    addi t0, zero, 23             # Contador de 23 bits
+
+
+bits_fraccion:
+    beq  t0, zero, bit_redondeo_fraccion
+
+    add  t3, t3, t3               # Fracción = Fracción * 2
+
+    la   t1, cien_mil
+    lw   t1, 0(t1)
+
+    bge  t3, t1, bit_fraccion_uno
+
+    add  a2, a2, a2               # Bit = 0
+    addi t0, t0, -1
+    jal  zero, bits_fraccion
+
+
+bit_fraccion_uno:
+    sub  t3, t3, t1               # Restar 1.0 (100000)
+    add  a2, a2, a2
+    addi a2, a2, 1                # Bit = 1
+    addi t0, t0, -1
+    jal  zero, bits_fraccion
+
+
+bit_redondeo_fraccion:
+    # ---------------------------------------------------------------
+    # BLOQUE 11: Bit extra de redondeo para casos < 1.0
+    # ---------------------------------------------------------------
+    add  t3, t3, t3
+
+    la   t1, cien_mil
+    lw   t1, 0(t1)
+
+    bge  t3, t1, redondeo_fraccion_bit_uno
+    jal  zero, ensamblar_fraccion
+
+
+redondeo_fraccion_bit_uno:
+    sub  t3, t3, t1
+
+    bne  t3, zero, hacer_redondeo_fraccion
+    andi t1, a2, 1
+    bne  t1, zero, hacer_redondeo_fraccion
+    jal  zero, ensamblar_fraccion
+
+
+hacer_redondeo_fraccion:
+    addi a2, a2, 1                # Redondear mantisa
+
+    addi t1, zero, 1
+    addi t2, zero, 23
+
+
+crear_limite_fraccion:
+    add  t1, t1, t1
+    addi t2, t2, -1
+    bne  t2, zero, crear_limite_fraccion
+
+    beq  a2, t1, desbordamiento_mantisa_fraccion
+    jal  zero, ensamblar_fraccion
+
+
+desbordamiento_mantisa_fraccion:
+    addi a2, zero, 0
+    addi t4, t4, 1                # Corregir exponente tras desbordamiento
+
+
+
+#####################################################################
+# ENSAMBLADO FINAL: Formato IEEE-754 [Signo | Exponente | Mantisa]
+#####################################################################
+
+ensamblar_entero:
+    # ---------------------------------------------------------------
+    # BLOQUE 12: Sesgar exponente (E + 127) y desplazar a bits 30:23
+    # ---------------------------------------------------------------
+    addi t4, t4, 127              # Aplicar sesgo IEEE-754
+
+    addi t1, zero, 23             # 23 desplazamientos hacia la izquierda
+    addi t5, t4, 0
+
+
+multiplicar_exponente_entero:
+    beq  t1, zero, juntar_entero
+    add  t5, t5, t5               # t5 = t5 << 1 (mediante suma)
+    addi t1, t1, -1
+    jal  zero, multiplicar_exponente_entero
+
+
+juntar_entero:
+    add  a0, t5, a2               # Unir Exponente desplazado + Mantisa
+
+
+    # ---------------------------------------------------------------
+    # BLOQUE 13: Aplicar Bit de Signo (Bit 31)
+    # ---------------------------------------------------------------
+    beq  a1, zero, float_positivo_entero
+
+    # Crear la máscara 0x80000000
+    addi t0, zero, 1
+    addi t1, zero, 31
+
+
+crear_signo_entero:
+    add  t0, t0, t0               # t0 = t0 << 1
+    addi t1, t1, -1
+    bne  t1, zero, crear_signo_entero
+
+    add  a0, a0, t0               # Insertar bit de signo en la posición 31
+
+
+float_positivo_entero:
+    jr   ra                       # Retornar valor float ensamblado
+
+
+
+ensamblar_fraccion:
+    # ---------------------------------------------------------------
+    # BLOQUE 14: Ensamblado idéntico para casos < 1.0
+    # ---------------------------------------------------------------
+    addi t4, t4, 127              # Sesgo del exponente
+
+    addi t1, zero, 23
+    addi t5, t4, 0
+
+
+multiplicar_exponente_fraccion:
+    beq  t1, zero, juntar_fraccion
+    add  t5, t5, t5
+    addi t1, t1, -1
+    jal  zero, multiplicar_exponente_fraccion
+
+
+juntar_fraccion:
+    add  a0, t5, a2               # Unir Exponente desplazado + Mantisa
+
+    beq  a1, zero, float_positivo_fraccion
+
+    addi t0, zero, 1
+    addi t1, zero, 31
+
+
+crear_signo_fraccion:
+    add  t0, t0, t0
+    addi t1, t1, -1
+    bne  t1, zero, crear_signo_fraccion
+
+    add  a0, a0, t0               # Insertar bit de signo
+
+
+float_positivo_fraccion:
+    jr   ra                       # Retornar de la función
+
+
+
+#####################################################################
+# ===================================================================
+#                           SECCIÓN DE DATOS
+# ===================================================================
+#####################################################################
 
 .data
 
-num_casos:
-    .word 20
-
+# -------------------------------------------------------------------
+# Banco de Pruebas BCD
+# Cada entrada ocupa 16 words (64 bytes):
+# [1 word Signo] [10 words Parte Entera] [5 words Parte Decimal]
+# -------------------------------------------------------------------
 pruebas_bcd:
-    .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0        # 0.00000
-    .word 0,0,0,0,0,0,0,0,0,1,0,0,0,0,0        # 1.00000
-    .word 0,0,0,0,0,0,0,0,0,1,0,0,0,0,0        # -1.00000
-    .word 0,0,0,0,0,0,0,0,0,0,1,0,0,0,0        # 0.10000
-    .word 0,0,0,0,0,0,0,0,0,0,1,0,0,0,0        # -0.10000
-    .word 0,0,0,0,0,0,0,0,0,0,8,0,0,0,0        # 0.80000
-    .word 0,0,0,0,0,0,0,0,0,0,8,0,0,0,0        # -0.80000
-    .word 0,0,0,0,0,0,0,0,0,1,2,5,0,0,0        # 1.25000
-    .word 0,0,0,0,0,0,0,0,0,1,2,5,0,0,0        # -1.25000
-    .word 0,0,0,0,0,0,0,0,0,3,1,4,1,5,9        # 3.14159
-    .word 0,0,0,0,0,0,0,0,0,3,1,4,1,5,9        # -3.14159
-    .word 0,0,0,0,0,0,0,0,0,9,5,0,0,0,0        # 9.50000
-    .word 0,0,0,0,0,0,0,0,0,9,5,0,0,0,0        # -9.50000
-    .word 0,0,0,0,0,0,0,0,1,0,0,0,0,0,0        # 10.00000
-    .word 0,0,0,0,0,0,0,0,1,0,0,0,0,0,0        # -10.00000
-    .word 0,0,0,0,0,0,0,0,3,5,5,0,0,0,0        # 35.50000
-    .word 0,0,0,0,0,0,0,0,3,5,5,0,0,0,0        # -35.50000
-    .word 0,0,0,0,0,0,0,9,9,9,9,9,9,9,9        # 999.99999
-    .word 2,1,4,7,4,8,3,6,4,7,0,0,0,0,0        # 2147483647.00000
-    .word 2,1,4,7,4,8,3,6,4,7,0,0,0,0,0        # -2147483647.00000
+    # 1. 0.00000
+    .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 
-signos_esperados:
-    .word 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1
+    # 2. 1.00000
+    .word 0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0
 
+    # 3. -1.00000
+    .word 1,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0
+
+    # 4. 0.10000
+    .word 0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0
+
+    # 5. -0.10000
+    .word 1,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0
+
+    # 6. 0.80000
+    .word 0,0,0,0,0,0,0,0,0,0,0,8,0,0,0,0
+
+    # 7. -0.80000
+    .word 1,0,0,0,0,0,0,0,0,0,0,8,0,0,0,0
+
+    # 8. 1.25000
+    .word 0,0,0,0,0,0,0,0,0,0,1,2,5,0,0,0
+
+    # 9. -1.25000
+    .word 1,0,0,0,0,0,0,0,0,0,1,2,5,0,0,0
+
+    # 10. 3.14159
+    .word 0,0,0,0,0,0,0,0,0,0,3,1,4,1,5,9
+
+    # 11. -3.14159
+    .word 1,0,0,0,0,0,0,0,0,0,3,1,4,1,5,9
+
+    # 12. 9.50000
+    .word 0,0,0,0,0,0,0,0,0,0,9,5,0,0,0,0
+
+    # 13. -9.50000
+    .word 1,0,0,0,0,0,0,0,0,0,9,5,0,0,0,0
+
+    # 14. 2147483647.00000
+    .word 0,2,1,4,7,4,8,3,6,4,7,0,0,0,0,0
+
+    # 15. -2147483647.00000
+    .word 1,2,1,4,7,4,8,3,6,4,7,0,0,0,0,0
+
+    # 16. 0.00001
+    .word 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+
+    # 17. -0.00001
+    .word 1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1
+
+    # 18. 12345.67890
+    .word 0,0,0,0,0,0,1,2,3,4,5,6,7,8,9,0
+
+    # 19. -98765.43210
+    .word 1,0,0,0,0,0,9,8,7,6,5,4,3,2,1,0
+
+    # 20. 1000000000.00000
+    .word 0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+
+
+num_pruebas:
+    .word 20                      # Total de casos en la suite de pruebas
+
+
+# -------------------------------------------------------------------
+# Valores flotantes hexadecimales esperados (IEEE-754)
+# -------------------------------------------------------------------
 floats_esperados:
-    .word 0x00000000
-    .word 0x3F800000
-    .word 0xBF800000
-    .word 0x3DCCCCCD
-    .word 0xBDCCCCCD
-    .word 0x3F4CCCCD
-    .word 0xBF4CCCCD
-    .word 0x3FA00000
-    .word 0xBFA00000
-    .word 0x40490FD0
-    .word 0xC0490FD0
-    .word 0x41180000
-    .word 0xC1180000
-    .word 0x41200000
-    .word 0xC1200000
-    .word 0x420E0000
-    .word 0xC20E0000
-    .word 0x447A0000
-    .word 0x4F000000
-    .word 0xCF000000
+    .word 0x00000000       # 0.00000
+    .word 0x3F800000       # 1.00000
+    .word 0xBF800000       # -1.00000
+    .word 0x3DCCCCCD       # 0.10000
+    .word 0xBDCCCCCD       # -0.10000
+    .word 0x3F4CCCCD       # 0.80000
+    .word 0xBF4CCCCD       # -0.80000
+    .word 0x3FA00000       # 1.25000
+    .word 0xBFA00000       # -1.25000
+    .word 0x40490FD0       # 3.14159
+    .word 0xC0490FD0       # -3.14159
+    .word 0x41180000       # 9.50000
+    .word 0xC1180000       # -9.50000
+    .word 0x4F000000       # 2147483647.00000
+    .word 0xCF000000       # -2147483647.00000
+    .word 0x3727C5AC       # 0.00001
+    .word 0xB727C5AC       # -0.00001
+    .word 0x4640E6B7       # 12345.67890
+    .word 0xC7C0E6B7       # -98765.43210
+    .word 0x4E6E6B28       # 1000000000.00000
 
+
+# -------------------------------------------------------------------
+# Buffer de salida para los resultados calculados
+# -------------------------------------------------------------------
 resultados_obtenidos:
-    .space 80
+    .space 80                     # Reserva 80 bytes (20 palabras de 4 bytes)
 
-errores_total:
-    .word 0
 
-sign_bits:
-    .word 0x00000000
-    .word 0x80000000
-
-constante_100000:
+# -------------------------------------------------------------------
+# Constante de Escalado Decimal
+# Usada para tratar 0.XXXXX como entero / 100000
+# -------------------------------------------------------------------
+cien_mil:
     .word 100000
 
-limite_mantisa:
-    .word 0x00800000
 
-paso_exponente:
-    .word 0x00800000
-
-potencias2:
-    .word 0x40000000, 0x20000000, 0x10000000, 0x08000000, 0x04000000, 0x02000000, 0x01000000
-    .word 0x00800000, 0x00400000, 0x00200000, 0x00100000, 0x00080000, 0x00040000, 0x00020000
-    .word 0x00010000, 0x00008000, 0x00004000, 0x00002000, 0x00001000, 0x00000800, 0x00000400
-    .word 0x00000200, 0x00000100, 0x00000080, 0x00000040, 0x00000020, 0x00000010, 0x00000008
-    .word 0x00000004, 0x00000002, 0x00000001
-
-exp_fields_pos:
-    .word 0x3F800000, 0x40000000, 0x40800000, 0x41000000, 0x41800000, 0x42000000, 0x42800000
-    .word 0x43000000, 0x43800000, 0x44000000, 0x44800000, 0x45000000, 0x45800000, 0x46000000
-    .word 0x46800000, 0x47000000, 0x47800000, 0x48000000, 0x48800000, 0x49000000, 0x49800000
-    .word 0x4A000000, 0x4A800000, 0x4B000000, 0x4B800000, 0x4C000000, 0x4C800000, 0x4D000000
-    .word 0x4D800000, 0x4E000000, 0x4E800000
-
-exp_fields_neg:
-    .word 0x3F000000, 0x3E800000, 0x3E000000, 0x3D800000, 0x3D000000
-    .word 0x3C800000, 0x3C000000, 0x3B800000, 0x3B000000, 0x3A800000
-
-pesos_fraccion:
-    .word 0x00400000, 0x00200000, 0x00100000, 0x00080000, 0x00040000, 0x00020000, 0x00010000
-    .word 0x00008000, 0x00004000, 0x00002000, 0x00001000, 0x00000800, 0x00000400, 0x00000200
-    .word 0x00000100, 0x00000080, 0x00000040, 0x00000020, 0x00000010, 0x00000008, 0x00000004
-    .word 0x00000002, 0x00000001
+# Variable donde se guarda la suma de fallos tras ejecutar la suite
+total_errores:
+    .word 0
