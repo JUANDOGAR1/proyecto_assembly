@@ -106,7 +106,7 @@ fin:
 
 
 # ==============================================================================
-# SUBRUTINA 1: bcd_a_float
+# SUBRUTINA 1: bcd_a_float (SIN USO DE STACK)
 # Entrada: a0 = Dirección del número BCD (11 words)
 # Salida:  fa0 = Float IEEE 754 de 32 bits
 # ==============================================================================
@@ -140,7 +140,7 @@ fin_entero:
     # Reconstruir la parte decimal
     la   t1, potencias10_5dig
     addi t3, zero, 5
-    addi a3, zero, 0                # Acumulador decimal
+    addi a3, zero, 0                # Acumulador decimal (usamos a3 para no usar registros s)
 
 bucle_decimal:
     beq  t3, zero, fin_decimal
@@ -178,15 +178,11 @@ fin_bcd2float:
 
 
 # ==============================================================================
-# SUBRUTINA 2: float_a_bcd
+# SUBRUTINA 2: float_a_bcd (SIN USO DE STACK NI REGISTROS S)
 # Entrada: fa0 = Float IEEE 754 de 32 bits
 #          a0  = Dirección de memoria destino para guardar los 11 words BCD
 # ==============================================================================
 float_a_bcd:
-    # Reservar espacio en la pila y resguardar ra
-    addi sp, sp, -4
-    sw   ra, 0(sp)
-
     fmv.x.w t0, fa0                 # Extraer representación binaria en t0
     lui  t1, 0x7F800                # Máscara para el exponente (bits 30..23)
     and  t2, t0, t1                 # Exponente extraído
@@ -201,11 +197,11 @@ float_a_bcd:
     # 2. Chequeo de Underflow o Cero puro
     beq  t3, zero, caso_cero_float2bcd
     
-    # Comparar contra Underflow (ej: denormalizados o muy pequeños < 0.000005f)
+    # Comparar contra Underflow (< 0.000005f)
     lui  t4, 0x36A00
     blt  t3, t4, caso_underflow_float2bcd
 
-    # 3. Chequeo de Overflow (> 99999.99999f en magnitud)
+    # 3. Chequeo de Overflow (> 99999.99999f)
     lui  t4, 0x47C35
     bge  t3, t4, caso_error_float2bcd
 
@@ -227,17 +223,53 @@ float_a_bcd:
     fmul.s ft2, ft2, ft3            # ft2 = fraccion * 100000.0f
     fcvt.w.s a3, ft2, rne           # a3 = entero de 5 dígitos decimales
 
-    # Escribir dígitos enteros BCD (dígitos D9..D5)
-    addi a1, a0, 4                  # Puntero a zona de dígitos enteros
-    add  a2, t2, zero               # Valor a descomponer
-    jal  ra, descomponer_5digitos
+    # --- INLINED: Descomponer los 5 dígitos ENTEROS directamente ---
+    addi a1, a0, 4                  # Puntero a zona de dígitos enteros en BCD
+    add  a2, t2, zero               # a2 = entero a descomponer
+    la   t1, potencias10_5dig
+    addi t3, zero, 5
 
-    # Escribir dígitos decimales BCD (dígitos D4..D0)
+desc_entero_loop:
+    beq  t3, zero, fin_desc_entero
+    lw   t5, 0(t1)
+    addi t4, zero, 0
+restas_entero_loop:
+    blt  a2, t5, fin_restas_entero
+    sub  a2, a2, t5
+    addi t4, t4, 1
+    j    restas_entero_loop
+fin_restas_entero:
+    sw   t4, 0(a1)
+    addi a1, a1, 4
+    addi t1, t1, 4
+    addi t3, t3, -1
+    j    desc_entero_loop
+fin_desc_entero:
+
+    # --- INLINED: Descomponer los 5 dígitos DECIMALES directamente ---
     addi a1, a0, 24                 # Puntero a zona de dígitos decimales (4 + 20)
-    add  a2, a3, zero               # Valor a descomponer
-    jal  ra, descomponer_5digitos
+    add  a2, a3, zero               # a2 = decimales a descomponer
+    la   t1, potencias10_5dig
+    addi t3, zero, 5
 
-    j    ret_float2bcd
+desc_decimal_loop:
+    beq  t3, zero, fin_desc_decimal
+    lw   t5, 0(t1)
+    addi t4, zero, 0
+restas_decimal_loop:
+    blt  a2, t5, fin_restas_decimal
+    sub  a2, a2, t5
+    addi t4, t4, 1
+    j    restas_decimal_loop
+fin_restas_decimal:
+    sw   t4, 0(a1)
+    addi a1, a1, 4
+    addi t1, t1, 4
+    addi t3, t3, -1
+    j    desc_decimal_loop
+fin_desc_decimal:
+
+    ret                             # Regreso limpio al main (ra intacto)
 
 caso_cero_float2bcd:
     srli t1, t0, 31                 # Extraer bit de signo (0 para +0.0, 1 para -0.0)
@@ -265,38 +297,7 @@ bucle_limpiar:
     j    bucle_limpiar
 
 ret_float2bcd:
-    # Restaurar ra y liberar la pila antes de regresar
-    lw   ra, 0(sp)
-    addi sp, sp, 4
-    ret
-
-
-# ==============================================================================
-# SUBRUTINA AUXILIAR: descomponer_5digitos
-# Entrada: a1 = Dirección base de almacenamiento (5 words)
-#          a2 = Valor entero a descomponer (< 100000)
-# ==============================================================================
-descomponer_5digitos:
-    la   t1, potencias10_5dig       # [10000, 1000, 100, 10, 1]
-    addi t3, zero, 5                # 5 dígitos
-
-bucle_desc:
-    beq  t3, zero, fin_desc
-    lw   t5, 0(t1)                  # Cargar potencia actual
-    addi t4, zero, 0                # Dígito acumulado
-bucle_restas:
-    blt  a2, t5, fin_restas
-    sub  a2, a2, t5
-    addi t4, t4, 1
-    j    bucle_restas
-fin_restas:
-    sw   t4, 0(a1)                  # Guardar dígito BCD
-    addi a1, a1, 4                  # Siguiente posición BCD
-    addi t1, t1, 4                  # Siguiente potencia
-    addi t3, t3, -1
-    j    bucle_desc
-fin_desc:
-    ret
+    ret                             # Regreso limpio al main
 
 
 # ==============================================================================
