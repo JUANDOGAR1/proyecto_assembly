@@ -56,7 +56,7 @@ bucle_pruebas_float2bcd:
 
     flw  fa0, 0(s0)                 # Cargar el float de prueba
     add  a0, s2, zero               # Dirección de salida en buffer
-    jal  ra, float_a_bcd            # Llamar Float -> BCD
+    jal  ra, float_a_bcd            # Llamar Float -> BCD y guarda ra
 
     # Comparar los 11 words resultantes contra los esperados
     add  t0, s2, zero               # Puntero a obtenido actual
