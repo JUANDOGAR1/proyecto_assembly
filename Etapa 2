@@ -21,14 +21,12 @@ bucle_pruebas_bcd2float:
 
     # Comparar el resultado binario obtenido contra el esperado bit a bit
     lw   t3, 0(s1)                  # Cargar valor binario IEEE 754 esperado de esperados_bcd2float
-    bne  t2, t3, error_prueba_bcd   # Si no coinciden los bits, ir a manejo de error
-#------
-prueba_correcta_bcd:
-    addi s0, s0, 44                 # Siguiente caso BCD (11 palabras * 4 bytes = 44 bytes)
-    addi s1, s1, 4                  # Siguiente resultado flotante esperado (4 bytes)
-    addi s2, s2, 4                  # Avanzar puntero de obtenidos
-    addi s4, s4, -1                 # Decrementar contador de pruebas pendientes
-    j    bucle_pruebas_bcd2float
+    
+    # Reemplazo de bne t2, t3, error_prueba_bcd usando sub y beq
+    sub  t6, t2, t3
+    beq  t6, zero, prueba_correcta_bcd # Si son iguales (diferencia == 0), continuar a prueba correcta
+    
+    # Si no son iguales, cae a error_prueba_bcd
 
 error_prueba_bcd:
     addi s5, zero, 0                # Marcar error en la bandera global (0 = Falló)
@@ -36,21 +34,91 @@ error_prueba_bcd:
     addi s1, s1, 4                  # Saltar al siguiente valor esperado
     addi s2, s2, 4                  # Saltar al siguiente destino de guardado
     addi s4, s4, -1                 # Decrementar contador
-    j    bucle_pruebas_bcd2float
+    beq  zero, zero, bucle_pruebas_bcd2float # Reemplazo de j bucle_pruebas_bcd2float
+
+prueba_correcta_bcd:
+    addi s0, s0, 44                 # Siguiente caso BCD (11 palabras * 4 bytes = 44 bytes)
+    addi s1, s1, 4                  # Siguiente resultado flotante esperado (4 bytes)
+    addi s2, s2, 4                  # Avanzar puntero de obtenidos
+    addi s4, s4, -1                 # Decrementar contador de pruebas pendientes
+    beq  zero, zero, bucle_pruebas_bcd2float # Reemplazo de j bucle_pruebas_bcd2float
 
 fin_pruebas_bcd:
     la   t0, resultado_bcd2float    # Dirección del indicador de resultado parcial
     sw   s5, 0(t0)                  # Guardar 1 si todo estuvo correcto, 0 si hubo al menos un fallo
 
+    # --------------------------------------------------------------------------
+    # CICLO DE PRUEBAS: FLOAT -> BCD
+    # --------------------------------------------------------------------------
+    la   s0, casos_float2bcd        # Puntero a la lista de floats de entrada (en hex)
+    la   s1, esperados_float2bcd    # Puntero a la lista de BCD esperados (11 palabras por caso)
+    la   s2, obtenidos_float2bcd    # Puntero al buffer de salida para los BCD generados
+    la   t0, num_casos_float2bcd
+    lw   s4, 0(t0)                  # Contador de casos de prueba pendientes (24)
+    addi s6, zero, 1                # Bandera de éxito global Float2BCD (1 = OK, 0 = Falló)
+
+bucle_pruebas_float2bcd:
+    beq  s4, zero, fin_pruebas_float # Si procesamos todos los casos, terminar ciclo de pruebas
+
+    lw   t0, 0(s0)                  # Cargar valor binario IEEE 754 entero de la lista
+    fmv.w.x fa0, t0                 # Pasar fa0 = valor float de entrada
+    add  a0, s2, zero               # Pasar a0 = dirección destino en el buffer para la salida BCD
+    jal  ra, float_a_bcd            # Llamar a la subrutina de conversión de float a BCD
+
+    # Comparar el arreglo BCD obtenido contra el esperado (11 palabras de 32 bits)
+    add  t0, s2, zero               # Puntero al BCD obtenido
+    add  t1, s1, zero               # Puntero al BCD esperado
+    addi t2, zero, 11               # Contador: 11 palabras a comparar
+
+bucle_comparar_bcd:
+    beq  t2, zero, prueba_correcta_float # Si las 11 palabras coinciden, la prueba es correcta
+    lw   t3, 0(t0)                  # Cargar palabra BCD obtenida
+    lw   t4, 0(t1)                  # Cargar palabra BCD esperada
+    
+    # Reemplazo de bne t3, t4, error_prueba_float usando sub y beq
+    sub  t6, t3, t4
+    beq  t6, zero, cont_comparar_bcd # Si son iguales, avanzar
+    beq  zero, zero, error_prueba_float # Si difieren, ir a error
+
+cont_comparar_bcd:
+    addi t0, t0, 4                  # Siguiente palabra BCD obtenida
+    addi t1, t1, 4                  # Siguiente palabra BCD esperada
+    addi t2, t2, -1                 # Decrementar contador de palabras
+    beq  zero, zero, bucle_comparar_bcd
+
+error_prueba_float:
+    addi s6, zero, 0                # Marcar error en la bandera global (0 = Falló)
+    addi s0, s0, 4                  # Saltar al siguiente caso de entrada float
+    addi s1, s1, 44                 # Saltar al siguiente BCD esperado
+    addi s2, s2, 44                 # Saltar al siguiente destino del buffer
+    addi s4, s4, -1                 # Decrementar contador
+    beq  zero, zero, bucle_pruebas_float2bcd # Reemplazo de j bucle_pruebas_float2bcd
+
+prueba_correcta_float:
+    addi s0, s0, 4                  # Siguiente valor float de entrada (4 bytes)
+    addi s1, s1, 44                 # Siguiente BCD esperado (11 palabras * 4 bytes = 44 bytes)
+    addi s2, s2, 44                 # Avanzar puntero del buffer de salida (44 bytes)
+    addi s4, s4, -1                 # Decrementar contador de pruebas pendientes
+    beq  zero, zero, bucle_pruebas_float2bcd # Reemplazo de j bucle_pruebas_float2bcd
+
+fin_pruebas_float:
+    la   t0, resultado_float2bcd    # Dirección del indicador de resultado parcial Float2BCD
+    sw   s6, 0(t0)                  # Guardar 1 si todo estuvo correcto, 0 si hubo al menos un fallo
+
+    # Evaluar resultado global consolidado
+    la   t0, resultado_final        # Dirección del indicador final global
+    and  t1, s5, s6                 # t1 = 1 solo si ambas baterías (BCD2Float y Float2BCD) fueron exitosas
+    sw   t1, 0(t0)                  # Guardar indicador final
+
 fin:
-    j    fin                        # Bucle infinito al terminar ejecución
+    beq  zero, zero, fin            # Bucle infinito al terminar ejecución (Reemplazo de j fin)
 
 # ==============================================================================
 # SUBRUTINA: bcd_a_float
 # Entrada:
-#   a0 = Dirección de memoria del número BCD (11 words: [Signo, D9..D5, D4..D0])
+#    a0 = Dirección de memoria del número BCD (11 words: [Signo, D9..D5, D4..D0])
 # Salida:
-#   fa0 = Valor en punto flotante IEEE 754 de 32 bits (RV32F)
+#    fa0 = Valor en punto flotante IEEE 754 de 32 bits (RV32F)
 
 bcd_a_float:
     # 1. Leer el signo
@@ -71,22 +139,22 @@ bucle_entero:
     addi t6, zero, 0                # t6 = Producto acumulado temporal
 mult_entero:
     beq  t4, zero, fin_mult_entero  # Si el dígito llegó a 0, terminar producto
-    add  t6, t6, t5                 # Acumular potencia
+    add  t6, t6, t5                  # Acumular potencia
     addi t4, t4, -1                 # Decrementar multiplicador (dígito)
-    j    mult_entero
+    beq  zero, zero, mult_entero    # Reemplazo de j mult_entero
 
 fin_mult_entero:
-    add  t2, t2, t6                 # Sumar producto parcial al valor entero total
+    add  t2, t2, t6                  # Sumar producto parcial al valor entero total
     addi a0, a0, 4                  # Siguiente dígito BCD
-    addi t1, t1, 4                  # Sigfloat:    .space 80   # 20 pruebas * 4 byuiente potencia
+    addi t1, t1, 4                  # Siguiente potencia
     addi t3, t3, -1                 # Decrementar contador de dígitos
-    j    bucle_entero
+    beq  zero, zero, bucle_entero   # Reemplazo de j bucle_entero
 
 fin_entero:
     # 3. Reconstruir la parte decimal
     la   t1, potencias10_5dig       # Reiniciar puntero a tabla de potencias
     addi t3, zero, 5                # Contador: 5 dígitos decimales
-    addi a3, zero, 0                # a3 = Acumulador de valor decimal = 0 (usamos a3 en vez de s6)
+    addi a3, zero, 0                # a3 = Acumulador de valor decimal = 0
 
 bucle_decimal:
     beq  t3, zero, fin_decimal      # Si se leyeron los 5 dígitos decimales, salir
@@ -96,60 +164,217 @@ bucle_decimal:
     addi t6, zero, 0                # t6 = Producto acumulado temporal
 mult_decimal:
     beq  t4, zero, fin_mult_decimal # Si el dígito llegó a 0, terminar producto
-    add  t6, t6, t5                 # Acumular potencia
+    add  t6, t6, t5                  # Acumular potencia
     addi t4, t4, -1                 # Decrementar multiplicador
-    j    mult_decimal
+    beq  zero, zero, mult_decimal   # Reemplazo de j mult_decimal
 
 fin_mult_decimal:
-    add  a3, a3, t6                 # Sumar producto parcial al valor decimal total
+    add  a3, a3, t6                  # Sumar producto parcial al valor decimal total
     addi a0, a0, 4                  # Siguiente dígito BCD
     addi t1, t1, 4                  # Siguiente potencia
     addi t3, t3, -1                 # Decrementar contador
-    j    bucle_decimal
+    beq  zero, zero, bucle_decimal  # Reemplazo de j bucle_decimal
 
 fin_decimal:
     # 4. Conversión y ensamblado en Punto Flotante IEEE 754
-    fcvt.s.w ft0, t2                # Convertir valor entero a float en ft0
-    fcvt.s.w ft1, a3                # Convertir valor decimal a float en ft1
+    fcvt.s.w ft0, t2                 # Convertir valor entero a float en ft0
+    fcvt.s.w ft1, a3                 # Convertir valor decimal a float en ft1
 
     la   t1, constante_100000       # Dirección de constante 100000.0f
-    flw  ft2, 0(t1)                 # Cargar ft2 = 100000.0f
+    lw   t5, 0(t1)                  # Cargar constante float desde memoria a entero
+    fmv.w.x ft2, t5                 # Mover constante a registro flotante ft2 = 100000.0f
 
-    fdiv.s ft1, ft1, ft2            # Escalar decimales: ft1 = Decimales / 100000.0f
-    fadd.s fa0, ft0, ft1            # Magnitud total flotante: fa0 = Entero + Decimales
+    fdiv.s ft1, ft1, ft2             # Escalar decimales: ft1 = Decimales / 100000.0f
+    fadd.s fa0, ft0, ft1             # Magnitud total flotante: fa0 = Entero + Decimales
 
     # 5. Aplicar bit de signo si t0 == 1
     beq  t0, zero, fin_bcd2float    # Si el signo es 0 (positivo), finalizar
     fmv.x.w t1, fa0                 # Mover float a registro entero t1 para manipular signo
-    lui  t2, 0x80000                # Cargar máscara de bit de signo (bit 31 = 1: 0x80000000)
+    
+    # Cargar máscara 0x80000000 (bit 31 = 1) usando lw desde memoria
+    la   t3, mascara_signo
+    lw   t2, 0(t3)                  # t2 = 0x80000000
     or   t1, t1, t2                 # Encender bit de signo (hacerlo negativo)
     fmv.w.x fa0, t1                 # Mover entero modificado de regreso al registro float fa0 (SALIDA)
 
 fin_bcd2float:
-    ret                             # Regresar al llamado principal (main)
+    jalr zero, 0(ra)                # Retorna a la dirección almacenada en ra
+
+# ==============================================================================
+# SUBRUTINA: float_a_bcd
+# Entrada:
+#    fa0 = Valor en punto flotante IEEE 754 de 32 bits (RV32F)
+#    a0  = Dirección de memoria del buffer destino (11 palabras para BCD)
+# Salida:
+#    Escribe en la memoria apuntada por a0 la estructura:
+#    [Estado/Signo (1 word), Digito_9..Digito_5 (5 words), Digito_4..Digito_0 (5 words)]
+#    Código de estado/signo: 0 = Positivo, 1 = Negativo, 2 = ERROR (Overflow/Infinito/NaN), 3 = Underflow
+
+float_a_bcd:
+    add  t0, a0, zero               # t0 = Puntero de escritura al buffer BCD destino
+
+    # 1. Extraer representación binaria de 32 bits para análisis de casos especiales
+    fmv.x.w t1, fa0                 # t1 = Representación bit a bit IEEE 754 del float
+
+    # Cargar máscara de exponente
+    la   t3, mascara_exp
+    lw   t5, 0(t3)                  # t5 = 0x7F800000
+    and  t2, t1, t5                 # Aislar exponente en t2
+    
+    # Comparar si exponente == 0x7F800000 (NaN o Infinito)
+    sub  t6, t2, t5
+    beq  t6, zero, f2bcd_error_overflow # Si es NaN/Infinito -> Ir a error overflow
+
+    # Eliminar el bit de signo para trabajar con magnitud absoluta
+    la   t3, mascara_no_signo
+    lw   t5, 0(t3)                  # t5 = 0x7FFFFFFF
+    and  t2, t1, t5                 # t2 = Magnitud absoluta binaria |x|
+
+    # Verificar Cero Exacto (0.0 o -0.0)
+    beq  t2, zero, f2bcd_cero       # Si la magnitud es 0 -> Ir a procesar Cero
+
+    # Verificar Underflow (|x| < 0.00001, float binario 0x3727C5AC)
+    la   t3, limite_underflow
+    lw   t5, 0(t3)                  # t5 = 0x3727C5AC
+    slt  t6, t2, t5                 # t6 = 1 si t2 < limite_underflow
+    addi t4, zero, 1
+    beq  t6, t4, f2bcd_underflow    # Si t2 < limite_underflow -> Ir a Underflow
+
+    # Verificar Overflow (|x| >= 100000.0, float binario 0x47C35000)
+    la   t3, limite_overflow
+    lw   t5, 0(t3)                  # t5 = 0x47C35000
+    slt  t6, t2, t5                 # t6 = 1 si t2 < limite_overflow
+    beq  t6, zero, f2bcd_error_overflow # Si t2 >= limite_overflow (t6 == 0) -> Ir a Overflow
+
+    # 2. Determinar el signo del número (0: Positivo, 1: Negativo)
+    la   t3, mascara_signo
+    lw   t5, 0(t3)                  # t5 = 0x80000000
+    and  t6, t1, t5                 # Aislar bit de signo
+    beq  t6, zero, f2bcd_signo_pos
+    addi t2, zero, 1                # Signo = 1 (Negativo)
+    beq  zero, zero, f2bcd_guardar_signo
+
+f2bcd_signo_pos:
+    addi t2, zero, 0                # Signo = 0 (Positivo)
+
+f2bcd_guardar_signo:
+    sw   t2, 0(t0)                  # Guardar código de signo en la posición 0 del buffer BCD
+    addi t0, t0, 4                  # Avanzar puntero a la sección de dígitos enteros
+
+    # 3. Separar parte entera y parte decimal flotante
+    # Remover signo del float fa0 para obtener magnitud absoluta en fa1
+    la   t3, mascara_no_signo
+    lw   t5, 0(t3)
+    and  t6, t1, t5                 # t6 = bits de magnitud sin signo
+    fmv.w.x fa1, t6                 # fa1 = |fa0|
+
+    fcvt.w.s t2, fa1                # t2 = Parte entera truncada
+    fcvt.s.w ft0, t2                # ft0 = Convertir parte entera t2 de regreso a float
+    fsub.s   ft1, fa1, ft0          # ft1 = Parte decimal pura en float (0.xxxxx)
+
+    # Escalar parte decimal a entero de 5 dígitos (Decimales * 100000.0f)
+    la   t3, constante_100000
+    lw   t5, 0(t3)                  # Cargar constante 100000.0f
+    fmv.w.x ft2, t5                 # ft2 = 100000.0f
+    fmul.s ft1, ft1, ft2            # ft1 = Parte decimal escalada (0.xxxxx * 100000.0f)
+    fcvt.w.s t3, ft1                # t3 = Valor entero de los decimales escalados (0 a 99999)
+
+    # 4. Descomponer la parte entera (t2) en 5 dígitos BCD usando potencias de 10
+    la   t1, potencias10_5dig       # Tabla [10000, 1000, 100, 10, 1]
+    addi t4, zero, 5                # Contador: 5 dígitos enteros
+
+f2bcd_bucle_entero:
+    beq  t4, zero, f2bcd_fin_entero # Si procesamos los 5 dígitos enteros, continuar
+    lw   t5, 0(t1)                  # Cargar potencia de 10 actual
+    addi t6, zero, 0                # Acumulador del dígito BCD actual
+
+f2bcd_div_entero:
+    slt  a1, t2, t5                 # a1 = 1 si t2 < potencia (t5)
+    addi a2, zero, 1
+    beq  a1, a2, f2bcd_guardar_entero # Si es menor, guardar dígito
+    sub  t2, t2, t5                 # Restar potencia al valor acumulado
+    addi t6, t6, 1                  # Incrementar dígito BCD
+    beq  zero, zero, f2bcd_div_entero
+
+f2bcd_guardar_entero:
+    sw   t6, 0(t0)                  # Guardar dígito entero BCD en el buffer
+    addi t0, t0, 4                  # Avanzar puntero del buffer
+    addi t1, t1, 4                  # Avanzar puntero a la siguiente potencia
+    addi t4, t4, -1                 # Decrementar contador de dígitos enteros
+    beq  zero, zero, f2bcd_bucle_entero
+
+f2bcd_fin_entero:
+    # 5. Descomponer la parte decimal (t3) en 5 dígitos BCD usando potencias de 10
+    la   t1, potencias10_5dig       # Reiniciar puntero a la tabla [10000, 1000, 100, 10, 1]
+    addi t4, zero, 5                # Contador: 5 dígitos decimales
+
+f2bcd_bucle_decimal:
+    beq  t4, zero, f2bcd_exito      # Si procesamos los 5 dígitos decimales, finalizar
+    lw   t5, 0(t1)                  # Cargar potencia de 10 actual
+    addi t6, zero, 0                # Acumulador del dígito BCD actual
+
+f2bcd_div_decimal:
+    slt  a1, t3, t5                 # a1 = 1 si t3 < potencia (t5)
+    addi a2, zero, 1
+    beq  a1, a2, f2bcd_guardar_decimal # Si es menor, guardar dígito
+    sub  t3, t3, t5                 # Restar potencia al valor decimal acumulado
+    addi t6, t6, 1                  # Incrementar dígito BCD
+    beq  zero, zero, f2bcd_div_decimal
+
+f2bcd_guardar_decimal:
+    sw   t6, 0(t0)                  # Guardar dígito decimal BCD en el buffer
+    addi t0, t0, 4                  # Avanzar puntero del buffer
+    addi t1, t1, 4                  # Avanzar puntero a la siguiente potencia
+    addi t4, t4, -1                 # Decrementar contador de dígitos decimales
+    beq  zero, zero, f2bcd_bucle_decimal
+
+# --- MANEJO DE CASOS ESPECIALES Y ERRORES ---
+f2bcd_cero:
+    la   t3, mascara_signo
+    lw   t5, 0(t3)
+    and  t6, t1, t5                 # Aislar signo de -0.0 vs +0.0
+    beq  t6, zero, f2bcd_cero_pos
+    addi t2, zero, 1
+    beq  zero, zero, f2bcd_guardar_cero_signo
+
+f2bcd_cero_pos:
+    addi t2, zero, 0
+
+f2bcd_guardar_cero_signo:
+    sw   t2, 0(t0)                  # Guardar el estado de signo en la posición 0
+    addi t0, t0, 4                  # Avanzar puntero del buffer
+    beq  zero, zero, f2bcd_rellenar_ceros # Rellenar con ceros los 10 dígitos restantes
+
+f2bcd_underflow:
+    addi t2, zero, 3                # Código de estado = 3 (Underflow)
+    sw   t2, 0(t0)                  # Guardar código de estado en la posición 0
+    addi t0, t0, 4                  # Avanzar puntero del buffer
+    beq  zero, zero, f2bcd_rellenar_ceros # Rellenar con ceros los 10 dígitos restantes
+
+f2bcd_error_overflow:
+    addi t2, zero, 2                # Código de estado = 2 (ERROR por Overflow/Infinito/NaN)
+    sw   t2, 0(t0)                  # Guardar código de estado en la posición 0
+    addi t0, t0, 4                  # Avanzar puntero del buffer
+
+f2bcd_rellenar_ceros:
+    addi t2, zero, 10               # Contador: 10 dígitos (5 enteros + 5 decimales)
+f2bcd_bucle_ceros:
+    beq  t2, zero, f2bcd_exito      # Si se escribieron los 10 ceros, salir
+    sw   zero, 0(t0)                # Guardar 0 en la posición BCD actual
+    addi t0, t0, 4                  # Avanzar puntero
+    addi t2, t2, -1                 # Decrementar contador
+    beq  zero, zero, f2bcd_bucle_ceros
+
+f2bcd_exito:
+    jalr zero, 0(ra)                # Retorna a la dirección almacenada en ra
 
 
-
-
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
-	
 .data
 
 # 1. BATERÍA DE PRUEBAS: BCD -> FLOAT
 num_casos_bcd2float: .word 20
 
 # Representación BCD de entrada:
-# Estructura de cada número: [Signo (1 word), Digito_9, ..., Digito_0 (10 words)]
-# Rango: 5 dígitos enteros, 5 dígitos decimales. (11 words por caso)
 casos_bcd2float:
     # 1.  0.00000
     .word 0,  0,0,0,0,0, 0,0,0,0,0
@@ -187,9 +412,9 @@ casos_bcd2float:
     .word 1,  0,0,0,3,5, 5,0,0,0,0
     # 18.  999.99999
     .word 0,  0,0,9,9,9, 9,9,9,9,9
-    # 19.  2147483647.00000 (Nota: truncado a 5 dígitos enteros BCD max) -> 83647.00000
+    # 19.  83647.00000
     .word 0,  8,3,6,4,7, 0,0,0,0,0
-    # 20. -2147483647.00000 -> -83647.00000
+    # 20. -83647.00000
     .word 1,  8,3,6,4,7, 0,0,0,0,0
 
 # Resultados IEEE 754 esperados para BCD -> Float (en Hexadecimal)
@@ -248,8 +473,6 @@ casos_float2bcd:
     .word 0xFF800000  # -Infinito (ERROR)
 
 # Resultados esperados para Float -> BCD:
-# Estructura: [Código de Estado/Signo, 5 Dígitos Enteros, 5 Dígitos Decimales]
-# Código de estado: 0 = Positivo, 1 = Negativo, 2 = ERROR (Overflow/Infinito), 3 = Underflow (Tratado como 0)
 esperados_float2bcd:
     .word 0,  0,0,0,0,0, 0,0,0,0,0  #   0.0
     .word 1,  0,0,0,0,0, 0,0,0,0,0  #  -0.0
@@ -280,13 +503,20 @@ esperados_float2bcd:
 # ------------------------------------------------------------------------------
 # 3. TABLAS DE CONSTANTES Y ESPACIOS DE MEMORIA (BUFFERS)
 
-# Factor de escala para manejar 5 dígitos decimales: 100000.0 (en formato IEEE 754 = 0x47C35000)
+# Factor de escala para manejar 5 dígitos decimales: 100000.0
 constante_100000:       .float 100000.0
+
+# Máscaras de bits y constantes binarias
+mascara_signo:          .word 0x80000000
+mascara_no_signo:       .word 0x7FFFFFFF
+mascara_exp:            .word 0x7F800000
+limite_overflow:        .word 0x47C35000  # 100000.0f
+limite_underflow:       .word 0x3727C5AC  # 0.00001f aproximadamente
 
 # Subtabla interna necesaria para la reconversión BCD
 potencias10_5dig: .word 10000, 1000, 100, 10, 1
 
-# Potencias de 10 acumuladas para reconstrucción/descomposición de enteros
+# Potencias de 10 acumuladas
 potencias10_bcd:        .word 1000000000, 100000000, 10000000, 1000000, 100000, 10000, 1000, 100, 10, 1
 
 # Buffers de salida para guardar resultados durante la ejecución
