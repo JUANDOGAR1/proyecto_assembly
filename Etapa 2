@@ -2,9 +2,7 @@
 _start:
 
 main:
-    # ==========================================================================
-    # PARTE 1: PRUEBAS BCD -> FLOAT
-    # ==========================================================================
+    #PRUEBAS BCD -> FLOAT
     la   s0, casos_bcd2float        # Puntero a la lista de entrada BCD
     la   s1, esperados_bcd2float    # Puntero a los floats esperados (en hex)
     la   s2, obtenidos_bcd2float    # Buffer de salida para floats generados
@@ -45,9 +43,7 @@ fin_pruebas_bcd2float:
     sw   s5, 0(t0)                  # Guardar resultado parcial (1 o 0)
 
 
-    # ==========================================================================
-    # PARTE 2: PRUEBAS FLOAT -> BCD
-    # ==========================================================================
+#PRUEBAS FLOAT -> BCD
     la   s0, casos_float2bcd        # Puntero a los floats de entrada
     la   s1, esperados_float2bcd    # Puntero a los BCD esperados (11 words/caso)
     la   s2, obtenidos_float2bcd    # Buffer de salida para BCD generados
@@ -105,11 +101,7 @@ fin:
     j    fin                        # Bucle infinito al terminar ejecución
 
 
-# ==============================================================================
-# SUBRUTINA 1: bcd_a_float (SIN USO DE STACK)
-# Entrada: a0 = Dirección del número BCD (11 words)
-# Salida:  fa0 = Float IEEE 754 de 32 bits
-# ==============================================================================
+# FUNCIONES DE CONVERSION bcd_a_float
 bcd_a_float:
     lw   t0, 0(a0)                  # t0 = Signo (0: +, 1: -)
     addi a0, a0, 4                  # Avanzar a los 5 dígitos enteros
@@ -177,11 +169,10 @@ fin_bcd2float:
     ret
 
 
-# ==============================================================================
-# SUBRUTINA 2: float_a_bcd (SIN USO DE STACK NI REGISTROS S)
+# SUBRUTINA 2: float_a_bcd
 # Entrada: fa0 = Float IEEE 754 de 32 bits
 #          a0  = Dirección de memoria destino para guardar los 11 words BCD
-# ==============================================================================
+
 float_a_bcd:
     fmv.x.w t0, fa0                 # Extraer representación binaria en t0
     lui  t1, 0x7F800                # Máscara para el exponente (bits 30..23)
@@ -300,9 +291,6 @@ ret_float2bcd:
     ret                             # Regreso limpio al main
 
 
-# ==============================================================================
-# SECCIÓN DE DATOS
-# ==============================================================================
 .data
 
 # 1. BATERÍA DE PRUEBAS: BCD -> FLOAT
